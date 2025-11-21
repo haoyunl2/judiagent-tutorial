@@ -4,7 +4,8 @@ This tutorial demonstrates how to use JUDI.jl and JUDIGPT for intelligent workfl
 
 ## Prerequisites
 
-- **Python 3.9+** (3.12+ recommended): Required for JUDIGPT
+- **Python 3.13+** (script will install/manage via `uv python`)  
+- **uv** package manager: <https://docs.astral.sh/uv/getting-started/installation/>
 - **Julia 1.11+**: Required for JUDI.jl
 - **JUDIGPT**: Must be cloned from GitHub repository
 
@@ -29,26 +30,25 @@ cd judiagent-tutorial
 # Make setup script executable (first time only)
 chmod +x setup.sh
 
-# Run automated setup
+# Run automated setup (requires uv)
 ./setup.sh
 ```
 
 The setup script will automatically detect JUDIGPT in the parent directory or sibling directory. If JUDIGPT is in a different location, it will prompt you to specify the path.
 
 This script will:
-- Check Python version (requires 3.9+, 3.12+ recommended)
-- Check Julia version (requires 1.11+)
-- Create Python virtual environment (`.venv`)
+- Ensure Python 3.13.9 is available via `uv python` and create a `.venv`
 - Install all Python dependencies from `requirements.txt`
 - **Automatically detect and install JUDIGPT** from:
   - Parent directory (`../JUDIGPT/`)
   - Sibling directory (`../../JUDIGPT/`)
   - Or prompt you to install it
+- Check Julia version (requires 1.11+)
 - Set up Julia environment from `Project.toml`
 - Register Jupyter kernel automatically
 - Help configure `.env` file if needed
-
-**Note**: The setup script will automatically detect and use `uv` (if available) for faster package installation. You can also force it with: `USE_UV=true ./setup.sh`
+  
+**Note**: `uv` is now the default package manager. Make sure it is on your `PATH` before running `./setup.sh`.
 
 ### Manual Setup
 

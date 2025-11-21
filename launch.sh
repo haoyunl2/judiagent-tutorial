@@ -4,6 +4,10 @@
 # Activate virtual environment
 if [ -d ".venv" ]; then
     source .venv/bin/activate
+    if [ -f ".venv/.pythonhome" ]; then
+        export PYTHONHOME=$(cat .venv/.pythonhome)
+        echo "Using PYTHONHOME=$PYTHONHOME"
+    fi
 else
     echo "ERROR: Virtual environment not found. Run ./setup.sh first."
     exit 1

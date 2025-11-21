@@ -8,26 +8,50 @@ echo "=========================================="
 echo "JUDIAgent Tutorial Setup"
 echo "=========================================="
 
-# Check Python version
+# Check Python version - prefer Python 3.13, fallback to 3.12/3.11/3.10
 echo "Checking Python version..."
-if ! command -v python3 &> /dev/null; then
-    echo "ERROR: Python 3 not found. Please install Python 3.12+"
-    exit 1
+shopt -s nullglob
+preferred_versions=("3.13" "3.12" "3.11" "3.10")
+PYTHON_CMD=""
+for ver in "${preferred_versions[@]}"; do
+    if command -v python${ver} &> /dev/null; then
+        PYTHON_CMD=$(command -v python${ver})
+        break
+    fi
+    candidates=("$HOME/.local/share/uv/python/cpython-${ver}"*/bin/python${ver})
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ]; then
+            PYTHON_CMD="$candidate"
+            break 2
+        fi
+    done
+done
+shopt -u nullglob
+
+if [ -z "$PYTHON_CMD" ]; then
+    if command -v python3 &> /dev/null; then
+        PYTHON_CMD=$(command -v python3)
+    else
+        echo "ERROR: Python 3.10+ not found. Please install Python 3.13+ (recommended) or 3.10+"
+        exit 1
+    fi
 fi
 
-python_version=$(python3 --version 2>&1 | awk '{print $2}')
-echo "Python version: $python_version"
-
-# Validate Python version (3.9+, recommend 3.12+)
-python_major=$(echo $python_version | cut -d. -f1)
-python_minor=$(echo $python_version | cut -d. -f2)
-
-if [ "$python_major" -lt 3 ] || ([ "$python_major" -eq 3 ] && [ "$python_minor" -lt 9 ]); then
-    echo "ERROR: Python 3.9+ required. Found: $python_version"
-    exit 1
+PYTHON_PREFIX=""
+NEEDS_PYTHONHOME=0
+if [[ "$PYTHON_CMD" == *".local/share/uv/python/"* ]]; then
+    PYTHON_PREFIX=$(dirname "$(dirname "$PYTHON_CMD")")
+    NEEDS_PYTHONHOME=1
+    export PYTHONHOME="$PYTHON_PREFIX"
+    echo "Detected uv-managed Python. Will export PYTHONHOME=$PYTHON_PREFIX when needed."
 fi
+
+python_version=$("$PYTHON_CMD" --version 2>&1 | awk '{print $2}')
+echo "Python version: $python_version (using $PYTHON_CMD)"
 
 # Warn if Python < 3.12
+python_major=$(echo $python_version | cut -d. -f1)
+python_minor=$(echo $python_version | cut -d. -f2)
 if [ "$python_major" -eq 3 ] && [ "$python_minor" -lt 12 ]; then
     echo "WARNING: Python 3.12+ recommended. Found: $python_version"
     echo "         Some dependencies may have compatibility issues. Proceeding anyway..."
@@ -49,23 +73,18 @@ echo "=========================================="
 echo "Setting up Python environment..."
 echo "=========================================="
 
-# Check if uv is available (faster alternative)
-# Can be overridden with USE_UV environment variable: USE_UV=true ./setup.sh
+# Use uv only if explicitly requested via USE_UV=true environment variable
+# Default: use standard pip (for server compatibility)
 USE_UV=${USE_UV:-false}
-if [ "$USE_UV" != "true" ] && command -v uv &> /dev/null; then
-    # Auto-detect in non-interactive mode, prompt in interactive mode
-    if [ -t 0 ]; then
-        echo "Found uv (faster package installer). Use it? [Y/n]"
-        read -t 5 -r response || response="y"
-        if [[ "$response" =~ ^[Yy]$ ]] || [ -z "$response" ]; then
-            USE_UV=true
-            echo "Using uv for faster installation..."
-        fi
+if [ "$USE_UV" = "true" ]; then
+    if ! command -v uv &> /dev/null; then
+        echo "WARNING: USE_UV=true but uv not found. Falling back to pip."
+        USE_UV=false
     else
-        # Non-interactive: use uv if available
-        USE_UV=true
-        echo "Using uv for faster installation (non-interactive mode)..."
+        echo "Using uv for faster installation (explicitly requested)..."
     fi
+else
+    echo "Using standard pip (set USE_UV=true to use uv if available)..."
 fi
 
 if [ -d ".venv" ]; then
@@ -74,35 +93,74 @@ if [ -d ".venv" ]; then
 else
     echo "Creating Python virtual environment..."
     if [ "$USE_UV" = true ]; then
-        uv venv
+        uv venv --python $PYTHON_CMD
+        source .venv/bin/activate
     else
-        python3 -m venv .venv
+        # Always use standard venv (no uv)
+        VENV_ARGS=""
+        if [ "$NEEDS_PYTHONHOME" -eq 1 ] && $PYTHON_CMD -m venv -h 2>&1 | grep -q -- "--without-pip"; then
+            VENV_ARGS="--without-pip"
+            echo "Using --without-pip (ensurepip unavailable for this Python build)..."
+        fi
+        $PYTHON_CMD -m venv $VENV_ARGS .venv
+        source .venv/bin/activate
+        if [ "$NEEDS_PYTHONHOME" -eq 1 ]; then
+            export PYTHONHOME="$PYTHON_PREFIX"
+        fi
+        if ! python -m pip --version >/dev/null 2>&1; then
+            echo "Installing pip inside virtual environment..."
+            curl -sS https://bootstrap.pypa.io/get-pip.py | python
+        fi
     fi
-    source .venv/bin/activate
+fi
+
+if [ "$NEEDS_PYTHONHOME" -eq 1 ]; then
+    export PYTHONHOME="$PYTHON_PREFIX"
+    echo "$PYTHON_PREFIX" > .venv/.pythonhome
+else
+    rm -f .venv/.pythonhome 2>/dev/null || true
+fi
+
+ACTIVATE_FILE=".venv/bin/activate"
+if [ -f "$ACTIVATE_FILE" ] && ! grep -q "JUDIAgent PYTHONHOME hook" "$ACTIVATE_FILE"; then
+cat <<'EOF' >> "$ACTIVATE_FILE"
+
+# JUDIAgent PYTHONHOME hook
+if [ -f "$VIRTUAL_ENV/.pythonhome" ]; then
+    export PYTHONHOME="$(cat "$VIRTUAL_ENV/.pythonhome")"
+else
+    unset PYTHONHOME
+fi
+EOF
+fi
+
+if ! python -m pip --version >/dev/null 2>&1; then
+    echo "Installing pip inside virtual environment..."
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python
 fi
 
 echo "Upgrading pip..."
 if [ "$USE_UV" = true ]; then
     uv pip install --upgrade pip
 else
-    pip install --upgrade pip
+    python -m pip install --upgrade pip
 fi
 
 echo "Installing Python dependencies..."
 if [ "$USE_UV" = true ]; then
     uv pip install -r requirements.txt
 else
-    pip install -r requirements.txt
+    python -m pip install -r requirements.txt
 fi
 
 echo "Installing JUDIGPT package..."
 # Check if JUDIGPT exists in parent directory
-if [ -d "../src/judigpt" ]; then
+if [ -d "../JUDIGPT/src/judigpt" ]; then
     echo "Found JUDIGPT in parent directory, installing..."
     if [ "$USE_UV" = true ]; then
         uv pip install -e ../
     else
-        pip install -e ../
+        python -m pip install -e ../JUDIGPT
     fi
     echo "✓ JUDIGPT installed from parent directory"
 # Check if JUDIGPT exists as a sibling directory
@@ -111,7 +169,7 @@ elif [ -d "../../JUDIGPT/src/judigpt" ]; then
     if [ "$USE_UV" = true ]; then
         uv pip install -e ../../
     else
-        pip install -e ../../
+        python -m pip install -e ../../JUDIGPT
     fi
     echo "✓ JUDIGPT installed from sibling directory"
 # Check if it's already installed via pip
@@ -152,7 +210,7 @@ if ! python -c "import ipykernel" 2>/dev/null; then
     if [ "$USE_UV" = true ]; then
         uv pip install ipykernel
     else
-        pip install ipykernel
+        python -m pip install ipykernel
     fi
 fi
 
